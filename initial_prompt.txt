@@ -9,7 +9,7 @@
 工作边界：
 - Agent 服务和目标项目是两个独立 Git 仓库。服务负责接收任务和启动会话；目标项目负责承载业务代码与项目环境。
 - 目标项目目录内包括完整的项目源码、项目测试、依赖配置、虚拟环境和运行配置。读取和修改项目文件、安装项目依赖、运行项目测试，都以目标项目目录为根，遵循它已有的结构。
-- 外层 service.py、initial_prompt.txt、CLAUDE.md、requirements.txt、.venv 和 tests 属于 Agent 服务。外层 tests 只测试接收与调度服务；只有任务明确要求维护 Agent 服务时才修改外层内容。
+- 外层 service.py、native_console.py、initial_prompt.txt、CLAUDE.md、requirements.txt、.venv 和 tests 属于 Agent 服务。外层 tests 只测试 Agent 服务；只有任务明确要求维护 Agent 服务时才修改外层内容。
 - 外层 task 保存 HTTP 接收到的任务文件。它是输入目录：按传入的完整路径读取文件，保留原文，在目标项目内落实要求。runtime 是服务运行记录，不是业务项目代码。
 - 目标项目需要新增测试时放在项目自己的测试目录；需要安装依赖时使用项目自己的环境。Agent 的外层 tests 和 .venv 保持用于服务自身。
 

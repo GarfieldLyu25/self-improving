@@ -11,6 +11,7 @@ Agent 服务和目标项目各自使用独立 Git 仓库。你可以进入 CC �
 ```text
 Agent 仓库/
 ├── service.py          # Agent 接收与调度服务
+├── native_console.py   # 原生启动 CC，仅注入 HTTP 任务文本
 ├── initial_prompt.txt  # 初始项目目标、上下文和工作规则
 ├── CLAUDE.md           # 给维护本项目的 Agent 看
 ├── start.cmd           # Windows 启动入口
@@ -71,7 +72,7 @@ start.cmd --prompt-file "C:\work\project-prompt.txt" --port 8765
 
 看到 CC 回复 `READY` 后即可发送任务。初始化期间收到的任务会等待初始化完成。
 
-同一个 CC 窗口也可以手动输入提示词、按 Enter 提交，以及用 Shift+Tab 切换权限模式。方向键、Home/End、Delete/Insert 和 Page Up/Page Down 会转发给 CC。HTTP 任务仍在这个会话中执行；手动使用时可先通过 `/state` 确认没有待执行的上传任务，避免输入时被自动任务打断。
+CC 直接使用当前 CMD 的原生输入输出，手动对话、Shift+Tab、鼠标滚动、复制粘贴和窗口尺寸变化均由 CC 与终端处理。Python 不读取或转换你的按键、鼠标，也不重绘 CC 界面；它只在空闲时将 HTTP 任务文本输入同一会话。手动输入前可通过 `/state` 确认没有待执行的上传任务，避免输入时被自动任务打断。更新服务文件后需关闭旧服务窗口并重新运行 `start.cmd`，当前进程不会自动加载新代码。
 
 ### 3. 用 Postman 传文件
 
@@ -107,7 +108,7 @@ start.cmd --host 0.0.0.0 --port 8765
 
 - `task/{任务ID}.txt`：收到的原始文件。
 - `runtime/results/{任务ID}.json`：最终状态和 CC 回复。
-- `runtime/terminal.log`：原生 CC 窗口输出。
+- CC 窗口：查看原生执行过程；完整对话日志位于 `runtime/native-session.json` 的 `transcript_path` 指向的 CC 原生日志文件。
 - `runtime/events.jsonl`：会话与任务提交事件。
 - 目标项目目录：检查实际代码和 Git 差异。
 
@@ -151,7 +152,7 @@ python -m venv .venv
 start.cmd
 ```
 
-`requirements.txt` 只有 `pywinpty`，用于连接真实 CC 终端。目标项目的依赖按该项目自己的说明安装在其目录内，不安装到 Agent 的 `.venv`。
+Agent 服务仅使用 Python 标准库，`requirements.txt` 无第三方包。现有环境里已安装的包可以保留；目标项目的依赖按该项目自己的说明安装在其目录内，不安装到 Agent 的 `.venv`。
 
 ### 3. 测试 Agent 服务
 

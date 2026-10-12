@@ -1,7 +1,6 @@
 .venv/
 runtime/
 workspace/
-/ab-sum/
 task/
 __pycache__/
 http-token.txt

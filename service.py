@@ -1,6 +1,5 @@
 """HTTP upload -> one actual interactive claude.exe in a visible terminal."""
 import argparse
-import ctypes
 import json
 import os
 import secrets
@@ -13,6 +12,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
+from native_console import ConsoleTaskWriter, launch_console
 
 ROOT = Path(__file__).resolve().parent
 MAX_UPLOAD = 65536
@@ -48,19 +48,6 @@ def build_session_launch(saved_session, project, context):
         return session_id, True, ['--resume', session_id, '--append-system-prompt', context]
     session_id = str(uuid.uuid4())
     return session_id, False, ['--session-id', session_id, context]
-
-
-def read_console_key(getwch):
-    """Translate Windows extended keys into the terminal sequences CC expects."""
-    key = getwch()
-    if key in ('\x00', '\xe0'):
-        return {'\x0f': '\x1b[Z',
-                'H': '\x1b[A', 'P': '\x1b[B',
-                'K': '\x1b[D', 'M': '\x1b[C',
-                'G': '\x1b[H', 'O': '\x1b[F',
-                'R': '\x1b[2~', 'S': '\x1b[3~',
-                'I': '\x1b[5~', 'Q': '\x1b[6~'}.get(getwch(), '')
-    return key
 
 
 def prepare_project(project, repository=None):
@@ -230,9 +217,6 @@ def handler_for(state):
 
 
 def main():
-    import msvcrt
-    from winpty import PtyProcess
-
     parser = argparse.ArgumentParser(description='接收任务文件，交给同一个 Claude Code 会话执行')
     parser.add_argument('--project', type=Path, help='可选：预先指定项目；也可进入 CC 后在对话中指定仓库')
     parser.add_argument('--port', type=int, default=8765)
@@ -251,11 +235,6 @@ def main():
     except (OSError, ValueError) as exc:
         parser.error(f'无法初始化目标项目或读取 prompt：{exc}')
 
-    # Enable ANSI rendering in this CMD, so the actual CC interface is displayed.
-    console = ctypes.windll.kernel32.GetStdHandle(-11)
-    mode = ctypes.c_ulong()
-    if ctypes.windll.kernel32.GetConsoleMode(console, ctypes.byref(mode)):
-        ctypes.windll.kernel32.SetConsoleMode(console, mode.value | 0x0004)
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     runtime.mkdir(exist_ok=True)
     context += ('\n\n启动位置：' + str(directory) + '\n'
@@ -283,62 +262,43 @@ def main():
     argv = [str(executable), '--model', 'deepseek-flash', '--setting-sources', 'user',
             '--settings', str(hooks), '--permission-mode', 'acceptEdits',
             '--add-dir', str(state.task_dir), *session_args]
-    size = shutil.get_terminal_size((110, 32))
-    process = PtyProcess.spawn(argv, cwd=str(directory), env=environment, dimensions=(size.lines, size.columns))
-    write_lock = threading.Lock()
-    stopped = threading.Event()
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-
-    def output():
-        with (runtime / 'terminal.log').open('a', encoding='utf-8') as log:
-            while not stopped.is_set():
-                try:
-                    data = process.read(8192)
-                except (EOFError, OSError):
-                    break
-                sys.stdout.write(data)
-                sys.stdout.flush()
-                log.write(data)
-                log.flush()
-        stopped.set()
-
-    threading.Thread(target=output, daemon=True).start()
-    print(f'HTTP: http://{args.host}:{args.port}/tasks | cwd: {directory} | CC session: {session_id}', flush=True)
+    writer = None
+    process = None
+    server_started = False
     try:
-        while process.isalive() and not stopped.is_set():
+        writer = ConsoleTaskWriter()
+        print(f'HTTP: http://{args.host}:{args.port}/tasks | cwd: {directory} | CC session: {session_id}', flush=True)
+        process = launch_console(argv, directory, environment)
+        writer.ignore_parent_control_c()
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        server_started = True
+        while process.poll() is None:
             for event_file in sorted(hook_directory.glob('*.json'), key=lambda path: path.stat().st_mtime_ns):
                 event_data = json.loads(event_file.read_text(encoding='utf-8'))
                 state.on_event(event_data)
                 with (runtime / 'events.jsonl').open('a', encoding='utf-8') as event_log:
                     event_log.write(json.dumps(event_data, ensure_ascii=False) + '\n')
                 event_file.unlink()
-            if msvcrt.kbhit():
-                keys = []
-                while msvcrt.kbhit():
-                    keys.append(read_console_key(msvcrt.getwch))
-                key = ''.join(keys)
-                with write_lock:
-                    process.write(key)
-            elif time.monotonic() - state.last_stop > 1:
+            if time.monotonic() - state.last_stop > 1:
                 task = state.next_task()
                 if task:
                     prompt = '请读取任务文件 ' + task['file'].replace('\\', '/') + ' 并执行文件中的任务。'
-                    with write_lock:
-                        process.write('\x15\x1b[200~' + prompt + '\x1b[201~')
+                    writer.write('\x15\x1b[200~' + prompt + '\x1b[201~')
                     time.sleep(0.15)
-                    with write_lock:
-                        process.write('\r')
+                    writer.write('\r')
             time.sleep(0.05)
-    except KeyboardInterrupt:
-        with write_lock:
-            process.write('\x03')
     finally:
-        stopped.set()
         state.status = 'stopped'
-        server.shutdown()
+        if server_started:
+            server.shutdown()
         server.server_close()
-        if process.isalive():
-            process.terminate(force=True)
+        try:
+            if process is not None and process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+        finally:
+            if writer is not None:
+                writer.close()
 
 
 def hook():
